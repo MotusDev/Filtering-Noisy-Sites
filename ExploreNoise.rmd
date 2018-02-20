@@ -1,0 +1,248 @@
+---
+title: "Data on noise"
+author: "pdt"
+date: "February 20, 2018"
+output: html_document
+---
+
+There is an issue of extreme noise at some sites. We may be able to use information provided in the database to determine which runs are likely invalid, or which time periods might be removed from the database, due to these problems. 
+
+In addition, some of these sites could (should) be re-run with stronger tag-finder parameters. For a list of these, see:
+
+https://github.com/jbrzusto/find_tags/blob/new_server/find_tags_motus.cpp
+
+First get some data from a known noisy and quiet sites. we should expand this to multiple noisy/quiet sites, to see what extent anything we find is more general. 
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+require(tidyverse)
+require(motus)
+```
+
+Get data from a noisy site and a non-noisy site. These were suggested by Zoe. I haven't (as of 20/2/2018) downloaded all of Earl Rowe. 
+```{r}
+tagme("SG-3214BBBK6103") ## Koffler
+tagme("SG-5113BBBK2786") ## Earl Rowe PP
+
+```
+
+```{r}
+nsy.sql <- tagme("SG-3214BBBK6103")
+qte.sql <- tagme("SG-5113BBBK2786", update=FALSE)
+
+nsy.tbl <- tbl(nsy.sql, "alltags")
+qte.tbl <- tbl(qte.sql, "alltags")
+
+## select variables and make a posix time
+
+nsy.df <- select(nsy.tbl, 
+                  hitID, runID, batchID, noise, 
+                  ts, sig, runLen, freqsd, sigsd, slop, burstSlop, port,
+                  site=recvDeployName) %>% 
+  distinct() %>% collect() %>% as.data.frame() %>%
+  mutate(ts = as.POSIXct(ts, origin="1970-01-01"), 
+         year = year(ts), 
+         type = "Noisy")
+
+qte.df <- select(qte.tbl, 
+                  hitID, runID, batchID, noise, 
+                  ts, sig, runLen, freqsd, sigsd, slop, burstSlop, port,
+                  site=recvDeployName) %>% 
+  distinct() %>% collect() %>% as.data.frame() %>%
+  mutate(ts = as.POSIXct(ts, origin="1970-01-01"), 
+         year = year(ts), 
+         type = "Quiet")
+
+## make a z-score for time, and clean up the funny burstSlop (issue for JB?)
+
+both.df <- bind_rows(nsy.df, qte.df) %>%
+  group_by(runID) %>%
+  mutate(ts.z = ts - mean(ts), 
+         burstSlop = ifelse(burstSlop < -2, 0, burstSlop))
+```
+
+Save the state so one can just pick up here ...
+```{r}
+saveRDS(both.df, "both.df.RDS")
+```
+```{r}
+both.df <- readRDS("both.df.RDS")
+```
+
+Some simple first steps. 
+
+Check with John, but the meaning of each of the relevant variables is ...
+- noise: an estimate of underlying noise?
+- freqsd: the SD of the frequency offset, within a hit
+- sigsd: the SD of the signal strength, within a hit
+- slop: the sum? of the absolute difference between the expected and actual times of pulses
+- burstSlop: (note that some of these are off by a factor of -25 or -10): like slop, but between hits
+
+We can consider 'noise' then to be within a tag (e.g. at the level of a hit or a run) or among tags (e.g. within a duration or a batch). 
+
+Initially, we can readily see that the distribution of runLen is very different at the two types of sites. This is expected, since the noisy site is mostly false positives, which should follow a poisson-like distribution.
+
+This also shows that there are two reasons for trying to figure out the issue of noise; one is to filter good data from bad sites (e.g. which of the noisy sites with longer runLen are actually valid) but also to filter bad data from good sites (e.g. which of the short runLen at the quiet site are actually good).
+
+```{r}
+both.df %>% filter(runLen < 10) %>%
+  select(runLen, runID, type) %>%
+  distinct() %>%
+  group_by(runLen, type) %>%
+  tally() %>%
+  spread(type, value=n)
+```
+
+We can start by summarizing, for a bunch of runLen, each of the stats above.
+```{r}
+statsum <- both.df %>% 
+  group_by(runLen, type) %>%
+  summarize(
+    mn.slop = mean(slop), 
+    var.slop = var(slop), 
+    mn.bslop = mean(burstSlop), 
+    var.bslop = var(burstSlop), 
+    mn.freqsd = mean(freqsd), 
+    var.freqsd = var(freqsd),
+    mn.noise = mean(noise), 
+    var.noise = var(noise),
+    mn.sigsd = mean(sigsd), 
+    var.sigsd = var(sigsd)
+  ) 
+    
+
+```
+This shows (that at least for this limited data set) that there is potentially some information in each of these statistics. 
+
+We can plot some of these statistics to see how they vary with runLen. We filter some of the quiet sites that have very long runs. 
+
+```{r}
+
+statsum <- gather(statsum, key="Variable", value="value", -runLen, -type)
+
+p <- ggplot(data=filter(statsum, runLen < 75), 
+            aes(runLen, value, colour=type))
+p + geom_point() + geom_line() + facet_wrap(~Variable, scales="free", ncol=5)
+
+```
+
+From the plots above, slop, and freqsd seem the most promising. Each has a pattern of a decreasing mean with runLen (where we are in effect treating runLen as a proxy for validity, which is the realistic assumption that long runs of false positives are less plausible than short runs). 
+
+Let's look at the distribution of mean slop, within runs, for noisy sites with short run lengths. What we're looking for here is a (possibly) bi-modal relationship, suggesting an easy way to distinguish good from bad runs.
+
+```{r}
+slop.df <- filter(both.df, type == "Noisy") %>%
+  group_by(runID, runLen) %>%
+  summarize(mn.slop = mean(slop), 
+            mn.freqsd = mean(freqsd))
+
+p <- ggplot(data=slop.df, aes(mn.slop, mn.freqsd))
+p + geom_point(alpha=0.1, size=0.4) + facet_wrap(~(runLen > 3))
+```
+
+There do appear to be two groups, most obviously in the longer runLens. These are those with mn.slop < 0.0015 and mn.freqsd < 0.15 (about). We could classify all of the points and see if any of the other statistics had any explanatory power towards that classification. 
+
+```{r}
+
+z.var = function(in.var) {return((in.var - mean(in.var))/sd(in.var))}
+
+class.df <- both.df %>% 
+  group_by(runLen, runID, type) %>%
+  summarize(
+    mn.slop = mean(slop), 
+    var.slop = var(slop), 
+    mn.bslop = mean(burstSlop), 
+    var.bslop = var(burstSlop), 
+    mn.freqsd = mean(freqsd), 
+    var.freqsd = var(freqsd),
+    mn.noise = mean(noise), 
+    var.noise = var(noise),
+    mn.sigsd = mean(sigsd), 
+    var.sigsd = var(sigsd)
+  ) %>%
+  ungroup() %>%
+  mutate(good = ifelse(mn.freqsd < 0.15 & mn.slop < 0.0015, TRUE, FALSE), 
+         z.slop = z.var(mn.slop), 
+         z.bslop = z.var(mn.bslop), 
+         z.freqsd = z.var(mn.freqsd), 
+         z.noise = z.var(mn.noise), 
+         z.sigsd = z.var(mn.sigsd), 
+         z.vslop = z.var(var.slop), 
+         z.vbslop = z.var(var.bslop), 
+         z.vfreqsd = z.var(var.freqsd), 
+         z.vnoise = z.var(var.noise), 
+         z.vsigsd = z.var(var.sigsd))
+
+```
+
+A first model shows the obvious -- there are many more good runs in the quiet site than in the noisy site. 
+
+```{r}
+m1 <- glm(good ~ z.bslop + z.noise + z.sigsd + runLen + type, 
+          binomial, data=class.df)
+anova(m1)
+summary(m1)
+```
+A table
+```{r}
+with(class.df, table(good, type))
+```
+Fit another model for just the noisy site. 
+
+```{r}
+m2 <- glm(good ~ z.bslop + z.noise + z.sigsd + 
+            z.vbslop + z.vnoise + z.vsigsd + runLen, 
+          binomial, data=filter(class.df, type == "Noisy"))
+anova(m2)
+summary(m2)
+```
+
+Some boxplots
+```{r }
+statsum2 <- gather(class.df, key="Variable", value="value", 
+                   -runLen, -type, -runID, -good) %>% 
+  mutate(rl = ifelse(runLen > 10, 10, runLen))
+
+p <- ggplot(data=filter(statsum2, runLen < 30, 
+                        Variable %in% c("z.bslop", "z.freqsd", "z.noise",
+                                        "z.sigsd", "z.slop")), 
+            aes(factor(rl), value, colour=good, fill=good))
+p + geom_boxplot() + facet_wrap(type~Variable, scales="free", ncol=5)
+```
+
+
+## pretty messy below here ... ignore for now. 
+
+
+Look at how freqsd varies among runs (just for longer runs) in the two sites
+
+```{r}
+p <- ggplot(data=filter(both.df, runLen > 9, type == "Noisy"), 
+            aes(ts.z, freqsd, colour=factor(runID)))
+
+p + geom_point() + geom_line() 
+```
+
+What about variance in freqsd? Summarize some things by runID
+
+```{r}
+both.sum.df <- group_by(both.df, type, runID) %>%
+  mutate(
+    mn.nse = mean(noise),
+    mn.fsd = mean(freqsd),
+    var.fsd = var(freqsd), 
+    len = length(noise))
+```
+
+```{r}
+p <- ggplot(data=filter(both.sum.df, len > 10), 
+            aes(mn.nse, mn.fsd, colour=type))
+p + geom_point()
+```
+
+```{r}
+p <- ggplot(data=filter(both.sum.df, len < 30), aes(factor(len), mn.fsd, colour=type, fill=type))
+p + geom_boxplot()
+```
+
