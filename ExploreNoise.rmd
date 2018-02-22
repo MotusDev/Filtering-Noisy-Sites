@@ -7,13 +7,15 @@ output: html_document
 
 There is an issue of extreme noise at some sites. We may be able to use information provided in the database to determine which runs are likely invalid, or which time periods might be removed from the database, due to these problems. 
 
-Most of these sites could (should) be re-run with stronger tag-finder parameters. This will be possible when the ability to replace batches within the database (including the local copy) has been implemented.  
+Most of these sites should be re-run with stronger tag-finder parameters. This could be done now, but will be easier when we have the ability to replace batches within the database (including the local copy).
 
-For a list of the parameters for running noisy sites, see:
+Filtering will still be useful after this point, mostly for assessing the veracity of short runLen hits.
+
+NB. For a list of the parameters for running noisy sites, see:
 
 https://github.com/jbrzusto/find_tags/blob/new_server/find_tags_motus.cpp
 
-Regardless, the work here will still be useful for providing additional information regarding the possibility that shorter runs (e.g. runs of 2 or 3) are 'real'.
+
 
 First get some data from a known noisy and quiet sites. we should expand this to multiple noisy/quiet sites, to see what extent anything we find is more general. 
 
@@ -146,8 +148,10 @@ Merge the data on noise back in to the main data frame.
 ## why isn't tmp.df the same size as all.df? Different batches maybe?
 tmp.df <- left_join(all.df, noise2.df, by=c("site", "ts.h")) %>%
   ungroup()
-
+## need to change this back to all.df here once I figure out where the 
+## extra hits are coming from.
 ```
+TODO: change both.df to all.df df from here on, and go back to the narrative of site first, then run and so on. 
 
 Some simple first steps. 
 
