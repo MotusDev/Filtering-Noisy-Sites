@@ -7,9 +7,13 @@ output: html_document
 
 There is an issue of extreme noise at some sites. We may be able to use information provided in the database to determine which runs are likely invalid, or which time periods might be removed from the database, due to these problems. 
 
-In addition, some of these sites could (should) be re-run with stronger tag-finder parameters. For a list of these, see:
+Most of these sites could (should) be re-run with stronger tag-finder parameters. This will be possible when the ability to replace batches within the database (including the local copy) has been implemented.  
+
+For a list of the parameters for running noisy sites, see:
 
 https://github.com/jbrzusto/find_tags/blob/new_server/find_tags_motus.cpp
+
+Regardless, the work here will still be useful for providing additional information regarding the possibility that shorter runs (e.g. runs of 2 or 3) are 'real'.
 
 First get some data from a known noisy and quiet sites. we should expand this to multiple noisy/quiet sites, to see what extent anything we find is more general. 
 
@@ -18,56 +22,131 @@ First get some data from a known noisy and quiet sites. we should expand this to
 knitr::opts_chunk$set(echo = TRUE)
 require(tidyverse)
 require(motus)
+Sys.setenv(TZ = "GMT")
 ```
 
 Get data from a noisy site and a non-noisy site. These were suggested by Zoe. I haven't (as of 20/2/2018) downloaded all of Earl Rowe. 
+
+Here are some others (from Zoe). 
+
+Koffler - SG-3214BBBK6103, Deployment 2729
+Formosa - SG-3615BBBK1E34. Deployments 3071, 3742, 3984
+Old Cut - SG-5113BBBK2972, Deployments 2549, 1124, 746, 634, 1503. This might be intermittent, most noise is from a high number of true tags in the area
+
+West Port Bruce - SG-3214BBBK4137, Deployment 2292.  Also might be intermittent due to lots of tags in the area
+
 ```{r}
 tagme("SG-3214BBBK6103") ## Koffler
 tagme("SG-5113BBBK2786") ## Earl Rowe PP
+tagme("SG-3615BBBK1E34", new=TRUE) ## Formosa
+tagme("SG-5113BBBK2972", update=TRUE) ## Old Cut
 
 ```
 
 ```{r}
-nsy.sql <- tagme("SG-3214BBBK6103")
-qte.sql <- tagme("SG-5113BBBK2786", update=FALSE)
+nsy1.sql <- tagme("SG-3214BBBK6103", update=FALSE)
+nsy2.sql <- tagme("SG-5113BBBK2972", update=FALSE)
+nsy3.sql <- tagme("SG-3615BBBK1E34", update=FALSE)
+qte1.sql <- tagme("SG-5113BBBK2786", update=FALSE)
 
-nsy.tbl <- tbl(nsy.sql, "alltags")
-qte.tbl <- tbl(qte.sql, "alltags")
+nsy1.tbl <- tbl(nsy1.sql, "alltags")
+nsy2.tbl <- tbl(nsy2.sql, "alltags")
+nsy3.tbl <- tbl(nsy3.sql, "alltags")
+
+qte1.tbl <- tbl(qte1.sql, "alltags")
 
 ## select variables and make a posix time
+## since we are doing thing among a bunch of sites, make a little function
+## to pull the tbl into a flat file
 
-nsy.df <- select(nsy.tbl, 
-                  hitID, runID, batchID, noise, 
-                  ts, sig, runLen, freqsd, sigsd, slop, burstSlop, port,
-                  site=recvDeployName) %>% 
-  distinct() %>% collect() %>% as.data.frame() %>%
-  mutate(ts = as.POSIXct(ts, origin="1970-01-01"), 
-         year = year(ts), 
+get.df <- function(in.tbl) {
+  out.df <- select(in.tbl, 
+                   motusTagID, hitID, runID, batchID, noise, ts, sig, runLen, 
+                   freqsd, sigsd, slop, burstSlop, port, site=recvSiteName) %>% 
+  distinct() %>% collect() %>%
+  mutate(ts = as.POSIXct(ts, origin="1970-01-01", TZ = "GMT"), 
+         year = year(ts))
+  return(out.df)
+}
+
+
+nsy1.df <- get.df(nsy1.tbl) %>%
+  mutate(site = "Koffler", 
          type = "Noisy")
 
-qte.df <- select(qte.tbl, 
-                  hitID, runID, batchID, noise, 
-                  ts, sig, runLen, freqsd, sigsd, slop, burstSlop, port,
-                  site=recvDeployName) %>% 
-  distinct() %>% collect() %>% as.data.frame() %>%
-  mutate(ts = as.POSIXct(ts, origin="1970-01-01"), 
-         year = year(ts), 
+nsy2.df <- get.df(nsy2.tbl) %>%
+  mutate(site = "Old Cut", 
+         type = "Noisy")
+
+nsy3.df <- get.df(nsy3.tbl) %>%
+  mutate(site = "Formosa", 
+         type = "Noisy")
+
+qte1.df <- get.df(qte1.tbl) %>%
+  mutate(site = "Earl Rowe", 
          type = "Quiet")
 
 ## make a z-score for time, and clean up the funny burstSlop (issue for JB?)
 
-both.df <- bind_rows(nsy.df, qte.df) %>%
+all.df <- bind_rows(nsy1.df, nsy2.df, nsy3.df, qte1.df) %>%
   group_by(runID) %>%
   mutate(ts.z = ts - mean(ts), 
+         ts.h = plyr::round_any(ts, 3600), 
          burstSlop = ifelse(burstSlop < -2, 0, burstSlop))
 ```
 
 Save the state so one can just pick up here ...
 ```{r}
-saveRDS(both.df, "both.df.RDS")
+saveRDS(all.df, "all.df.RDS")
 ```
 ```{r}
-both.df <- readRDS("both.df.RDS")
+all.df <- readRDS("all.df.RDS")
+```
+
+The first question is how to identify where there is noise. That can be done by simply looking at the proportion of runLen = 2 and runLen = 3 within each batch. If it is all or mostly noise, then these should follow an exponential distribution.
+
+There is probably some theoretical way to figure out what the parameters of that distribution might look like, but we could also just explore it empirically.
+
+So first look at the mean runLen across batches, for noisy and not-noisy sites. 
+
+```{r}
+noise.df <- group_by(all.df, site, batchID) %>%
+  summarize(mn.rl = mean(runLen), 
+            min.ts = min(ts), 
+            max.ts = max(ts), 
+            length = difftime(max.ts, min.ts, units="hours"),
+            n.tag = length(unique(motusTagID)))
+
+```
+
+The problem is that the range of lengths of batches is huge. So, although we eventually need to re-run batches, we first need to look at shorter time intervals. 
+
+```{r}
+noise2.df <- group_by(all.df, site, batchID, ts.h) %>%
+  summarize(mn.rl = mean(runLen), 
+            min.ts = min(ts), 
+            max.ts = max(ts), 
+            length = difftime(max.ts, min.ts, units="hours"),
+            n.tag = length(unique(motusTagID)))
+```
+
+```{r}
+p <- ggplot(data=noise2.df, aes(log(mn.rl), ts.h, colour=site))
+p + geom_point()
+```
+
+```{r}
+p <- ggplot(data=noise2.df, aes(log10(mn.rl), log10(n.tag), colour=factor(batchID)))
+p + geom_jitter() + facet_wrap(~site)
+```
+
+Merge the data on noise back in to the main data frame.
+
+```{r}
+## why isn't tmp.df the same size as all.df? Different batches maybe?
+tmp.df <- left_join(all.df, noise2.df, by=c("site", "ts.h")) %>%
+  ungroup()
+
 ```
 
 Some simple first steps. 
@@ -211,6 +290,15 @@ p <- ggplot(data=filter(statsum2, runLen < 30,
 p + geom_boxplot() + facet_wrap(type~Variable, scales="free", ncol=5)
 ```
 
+So now, we should look at these statistics within noisy and non-noisy hours, as defined by runLen and number of tags.
+
+And look at the relationship between the noisy periods and freqsd. 
+
+```{r}
+p <- ggplot(data=sample_n(tmp.df, 10000), 
+            aes(log10(mn.rl), freqsd, colour=as.factor(runLen > 4)))
+p + geom_point() + facet_wrap(~type)
+```
 
 ## pretty messy below here ... ignore for now. 
 
