@@ -46,10 +46,10 @@ tagme("SG-5113BBBK2972", update=TRUE) ## Old Cut
 ```
 
 ```{r}
-nsy1.sql <- tagme("SG-3214BBBK6103", update=FALSE)
-nsy2.sql <- tagme("SG-5113BBBK2972", update=FALSE)
-nsy3.sql <- tagme("SG-3615BBBK1E34", update=FALSE)
-qte1.sql <- tagme("SG-5113BBBK2786", update=FALSE)
+nsy1.sql <- tagme("SG-3214BBBK6103", update=TRUE)
+nsy2.sql <- tagme("SG-5113BBBK2972", update=TRUE)
+nsy3.sql <- tagme("SG-3615BBBK1E34", update=TRUE)
+qte1.sql <- tagme("SG-5113BBBK2786", update=TRUE)
 
 nsy1.tbl <- tbl(nsy1.sql, "alltags")
 nsy2.tbl <- tbl(nsy2.sql, "alltags")
