@@ -54,7 +54,6 @@ qte1.sql <- tagme("SG-5113BBBK2786", update=TRUE)
 nsy1.tbl <- tbl(nsy1.sql, "alltags")
 nsy2.tbl <- tbl(nsy2.sql, "alltags")
 nsy3.tbl <- tbl(nsy3.sql, "alltags")
-
 qte1.tbl <- tbl(qte1.sql, "alltags")
 
 ## select variables and make a posix time
