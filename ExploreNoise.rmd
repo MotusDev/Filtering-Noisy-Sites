@@ -5,20 +5,40 @@ date: "February 20, 2018"
 output: html_document
 ---
 
-There is an issue of extreme noise at some sites. We may be able to use information provided in the database to determine which runs are likely invalid, or which time periods might be removed from the database, due to these problems. 
+There is an issue of extreme noise at some sites.
 
-Most of these sites should be re-run with stronger tag-finder parameters. This could be done now, but will be easier when we have the ability to replace batches within the database (including the local copy).
+We may be able to use information provided in the database to determine which runs are likely invalid, or which time periods might be removed from the database, due to these problems. 
 
-Filtering will still be useful after this point, mostly for assessing the veracity of short runLen hits.
+Most of these sites should be re-run with more stringent parameters in the tag-finder.
+
+We should re-run those that we can immediately, and manually retire batches from the database. 
+
+A proposed workflow at present is, for each processed batch, to calculate the proportion of runLen 2, 3 plus the numbers of tags detected, and the number of different projects. We can come up with definitive criteria, but the worst ones should be obvious. These batches should be re-run, and the previous data retired from the database.
+
+A future enhancement will provide the ability for a user to decide themselves whether a batch should be retired/replaced from their local database.
 
 NB. For a list of the parameters for running noisy sites, see:
 
 https://github.com/jbrzusto/find_tags/blob/new_server/find_tags_motus.cpp
 
+Even with more stringent tag finding, users will still be required to filter their data, since some noise is intermittent, and we don't know the trade-off between the stringency of tag-finder parameters and the prevalence of false positives.
 
+Information on the amount of noise at a site can be determined from three main sources:
+
+A) On the receiver API 
+- the number of pulses per hour: Noisy periods will have a larger number (relative to the number of tags detected). 
+- the number of tags detcted: noisy periods will have large numbers of tags
+- the distribution of run lengths: noisy period will have many runLen of 2 and 3.
+
+Ideally, when a user calls for data on a given receiver, they would be provided with these data (it is also a convenient way to get an empirical estimate of whether a receiver was working or not). 
+
+B) In the local tag database
+
+Filtering after this point is mostly for assessing the veracity of short runLen hits.
+
+Here we examine this empirically, using known noisy and quiet sites.
 
 First get some data from a known noisy and quiet sites. we should expand this to multiple noisy/quiet sites, to see what extent anything we find is more general. 
-
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
@@ -26,7 +46,6 @@ require(tidyverse)
 require(motus)
 Sys.setenv(TZ = "GMT")
 ```
-
 Get data from a noisy site and a non-noisy site. These were suggested by Zoe. I haven't (as of 20/2/2018) downloaded all of Earl Rowe. 
 
 Here are some others (from Zoe). 
@@ -37,7 +56,7 @@ Old Cut - SG-5113BBBK2972, Deployments 2549, 1124, 746, 634, 1503. This might be
 
 West Port Bruce - SG-3214BBBK4137, Deployment 2292.  Also might be intermittent due to lots of tags in the area
 
-```{r}
+```{r, message=FALSE}
 tagme("SG-3214BBBK6103") ## Koffler
 tagme("SG-5113BBBK2786") ## Earl Rowe PP
 tagme("SG-3615BBBK1E34", new=TRUE) ## Formosa
